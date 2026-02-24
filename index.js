@@ -799,12 +799,21 @@ function initializeScheduledTasks(sock) {
   console.log("✅ Scheduled tasks initialized!");
 }
 
-// ==================== START BOT ====================
-// Delete auth folder if you want to force new QR code (uncomment if needed)
-// if (fs.existsSync('./auth_info')) {
-//   fs.rmSync('./auth_info', { recursive: true, force: true });
-//   console.log('🗑️ Deleted old auth folder - will generate new QR');
-// }
+// Add this near the end of your file, before connectToWhatsApp()
+
+// FORCE DELETE auth folder on Render to generate new QR
+console.log('🗑️ Checking for old auth folder on Render...');
+const authPath = './auth_info';
+if (fs.existsSync(authPath)) {
+  try {
+    fs.rmSync(authPath, { recursive: true, force: true });
+    console.log('✅ Old auth folder deleted - will generate new QR code');
+  } catch (err) {
+    console.log('⚠️ Could not delete auth folder:', err.message);
+  }
+} else {
+  console.log('✅ No existing auth folder - will generate new QR code');
+}
 
 connectToWhatsApp().catch(err => {
   console.error('❌ Failed to start:', err);
