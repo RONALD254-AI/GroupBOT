@@ -123,10 +123,29 @@ loadData();
 async function connectToWhatsApp() {
   console.log('🚀 Starting bot with Baileys...');
   
-  // Delete old auth folder if it exists to force new QR
-  const authFolder = './auth_info';
-  if (fs.existsSync(authFolder)) {
-    console.log('📁 Auth folder exists - keeping existing session');
+  // FIX: Check if auth folder is empty/corrupted and delete if needed
+  const authPath = './auth_info';
+  if (fs.existsSync(authPath)) {
+    try {
+      const files = fs.readdirSync(authPath);
+      // If folder is empty or has very few files, it's corrupted
+      if (files.length === 0 || files.length < 3) {
+        console.log('⚠️ Auth folder exists but appears empty/corrupted - deleting...');
+        fs.rmSync(authPath, { recursive: true, force: true });
+        console.log('✅ Corrupted auth folder deleted');
+      } else {
+        console.log('📁 Valid auth folder exists - will try to reuse session');
+      }
+    } catch (err) {
+      console.log('⚠️ Error checking auth folder:', err.message);
+      // If we can't read it, delete it to be safe
+      try {
+        fs.rmSync(authPath, { recursive: true, force: true });
+        console.log('✅ Deleted problematic auth folder');
+      } catch (e) {}
+    }
+  } else {
+    console.log('✅ No existing auth folder - will generate new QR code');
   }
   
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -139,10 +158,12 @@ async function connectToWhatsApp() {
     syncFullHistory: false,
     markOnlineOnConnect: false,
     qrTimeout: 60000, // 60 seconds timeout
+    defaultQueryTimeoutMs: 60000,
   });
 
   // Flag to track if QR was shown
   let qrShown = false;
+  let connectionAttempts = 0;
 
   // Handle QR Code with MULTIPLE fallback methods
   sock.ev.on('connection.update', (update) => {
@@ -151,6 +172,8 @@ async function connectToWhatsApp() {
     // Method 1: Direct QR from update
     if (qr && !qrShown) {
       qrShown = true;
+      connectionAttempts = 0;
+      
       console.log('\n' + '🔔'.repeat(30));
       console.log('🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
       console.log('🔔               QR CODE READY TO SCAN                🔔');
@@ -173,8 +196,9 @@ async function connectToWhatsApp() {
       console.log('\n');
       
       // Method 2: Also log the raw QR as backup
-      console.log('🔑 Raw QR (if above doesn\'t display properly):');
-      console.log(qr.substring(0, 50) + '...');
+      console.log('🔑 Raw QR (backup - if QR above doesn\'t scan):');
+      console.log(qr);
+      console.log('\n');
     }
     
     if (connection === 'connecting') {
@@ -188,6 +212,7 @@ async function connectToWhatsApp() {
       console.log('='.repeat(60));
       console.log(`📱 Bot: ${BOT_CONFIG.botName}`);
       console.log(`👑 Admin: +${BOT_CONFIG.adminNumber}`);
+      console.log(`👑 Co-Admin: +${BOT_CONFIG.secondAdminNumber}`);
       console.log(`🎯 Target Group: ${TARGET_GROUP_ID}`);
       console.log('='.repeat(60));
       
@@ -207,23 +232,45 @@ async function connectToWhatsApp() {
     }
     
     if (connection === 'close') {
+      connectionAttempts++;
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('🔄 Connection closed. Reconnecting:', shouldReconnect);
       
-      // Reset QR flag on disconnect
-      qrShown = false;
-      
-      if (shouldReconnect) {
+      if (shouldReconnect && connectionAttempts < 5) {
+        console.log(`🔄 Connection closed. Reconnecting (attempt ${connectionAttempts}/5)...`);
+        
+        // Reset QR flag on disconnect
+        qrShown = false;
+        
+        // If we've tried multiple times without QR, delete auth folder
+        if (connectionAttempts >= 3 && !qrShown) {
+          console.log('⚠️ Multiple connection attempts without QR - clearing auth folder...');
+          try {
+            if (fs.existsSync('./auth_info')) {
+              fs.rmSync('./auth_info', { recursive: true, force: true });
+              console.log('✅ Auth folder cleared - will generate new QR');
+            }
+          } catch (err) {
+            console.log('⚠️ Could not clear auth folder:', err.message);
+          }
+        }
+        
         // Wait 3 seconds before reconnecting
         setTimeout(() => {
           connectToWhatsApp();
         }, 3000);
+      } else if (connectionAttempts >= 5) {
+        console.log('❌ Max reconnection attempts reached. Restarting...');
+        process.exit(1);
       } else {
         console.log('❌ Logged out. Please scan QR code again.');
         // Delete auth folder to force new QR
-        if (fs.existsSync('./auth_info')) {
-          fs.rmSync('./auth_info', { recursive: true, force: true });
-        }
+        try {
+          if (fs.existsSync('./auth_info')) {
+            fs.rmSync('./auth_info', { recursive: true, force: true });
+            console.log('✅ Auth folder deleted - will generate new QR on restart');
+          }
+        } catch (err) {}
+        
         // Restart connection
         setTimeout(() => {
           connectToWhatsApp();
@@ -799,22 +846,7 @@ function initializeScheduledTasks(sock) {
   console.log("✅ Scheduled tasks initialized!");
 }
 
-// Add this near the end of your file, before connectToWhatsApp()
-
-// FORCE DELETE auth folder on Render to generate new QR
-console.log('🗑️ Checking for old auth folder on Render...');
-const authPath = './auth_info';
-if (fs.existsSync(authPath)) {
-  try {
-    fs.rmSync(authPath, { recursive: true, force: true });
-    console.log('✅ Old auth folder deleted - will generate new QR code');
-  } catch (err) {
-    console.log('⚠️ Could not delete auth folder:', err.message);
-  }
-} else {
-  console.log('✅ No existing auth folder - will generate new QR code');
-}
-
+// ==================== START BOT ====================
 connectToWhatsApp().catch(err => {
   console.error('❌ Failed to start:', err);
 });
