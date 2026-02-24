@@ -1,20 +1,21 @@
 {
   "name": "highron-bot",
   "version": "3.0.0",
-  "description": "HighRon Master WhatsApp Bot",
-  "main": "index.js",
+  "description": "HighRon Master WhatsApp Bot - Baileys Version",
+  "main": "baileys-bot.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js",
-    "render-start": "node index.js"
+    "start": "node baileys-bot.js"
   },
   "dependencies": {
-    "@wppconnect-team/wppconnect": "^1.30.0",
+    "@whiskeysockets/baileys": "^6.5.0",
     "qrcode-terminal": "^0.12.0",
     "node-cron": "^3.0.2",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "pino": "^8.17.2",
+    "axios": "^1.6.2"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "18.x"
   }
 }
