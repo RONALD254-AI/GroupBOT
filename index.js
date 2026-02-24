@@ -1,4 +1,4 @@
-// baileys-bot.js - HighRon Master Bot with ALL Commands (Baileys Version)
+// baileys-bot.js - HighRon Master Bot with ALL Commands (FULLY FIXED QR CODE)
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadContentFromMessage } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
@@ -7,6 +7,7 @@ const cron = require('node-cron');
 const express = require('express');
 const pino = require('pino');
 const axios = require('axios');
+const { execSync } = require('child_process');
 
 // ==================== RENDER PORT BINDING ====================
 const app = express();
@@ -20,7 +21,7 @@ app.get('/', (req, res) => {
         <h1>🤖 HighRon Master Bot</h1>
         <p>Status: <strong style="color: green;">ONLINE</strong></p>
         <p>Bot is running with Baileys (no browser needed)</p>
-        <p><small>Check Render logs for QR code to scan.</small></p>
+        <p><small>Check Render logs BELOW for QR code to scan.</small></p>
         <p><small>Version: 3.0.0</small></p>
       </body>
     </html>
@@ -30,6 +31,12 @@ app.get('/', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Render health check server running on port ${PORT}`);
 });
+
+// ==================== SELF-PING TO KEEP ALIVE ====================
+setInterval(() => {
+  axios.get(`https://groupbot-duv3.onrender.com`).catch(() => {});
+  console.log('💓 Self-ping to keep alive');
+}, 600000); // Every 10 minutes
 
 // ==================== BOT CONFIGURATIONS ====================
 const BOT_CONFIG = {
@@ -112,44 +119,72 @@ console.log('='.repeat(60));
 
 loadData();
 
-// ==================== BAILEYS CONNECTION ====================
+// ==================== FIXED BAILEYS CONNECTION WITH QR CODE ====================
 async function connectToWhatsApp() {
   console.log('🚀 Starting bot with Baileys...');
+  
+  // Delete old auth folder if it exists to force new QR
+  const authFolder = './auth_info';
+  if (fs.existsSync(authFolder)) {
+    console.log('📁 Auth folder exists - keeping existing session');
+  }
   
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   
   const sock = makeWASocket({
-    printQRInTerminal: false,
+    printQRInTerminal: true, // CRITICAL: This forces QR to print in terminal
     auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['HighRon Bot', 'Chrome', '3.0.0']
+    browser: ['HighRon Bot', 'Chrome', '3.0.0'],
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    qrTimeout: 60000, // 60 seconds timeout
   });
 
-  // Handle QR Code
+  // Flag to track if QR was shown
+  let qrShown = false;
+
+  // Handle QR Code with MULTIPLE fallback methods
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
     
-    if (qr) {
-      console.log('\n' + '='.repeat(60));
-      console.log('📱 SCAN THIS QR CODE WITH WHATSAPP:');
-      console.log('='.repeat(60));
-      qrcode.generate(qr, { small: true });
-      console.log('='.repeat(60));
-      console.log('\n1. Open WhatsApp on your phone');
-      console.log('2. Tap Menu > Linked Devices');
+    // Method 1: Direct QR from update
+    if (qr && !qrShown) {
+      qrShown = true;
+      console.log('\n' + '🔔'.repeat(30));
+      console.log('🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔🔔');
+      console.log('🔔               QR CODE READY TO SCAN                🔔');
+      console.log('🔔'.repeat(30));
+      console.log('\n' + '='.repeat(70));
+      console.log('📱 SCAN THIS QR CODE WITH YOUR WHATSAPP:');
+      console.log('='.repeat(70));
+      
+      // Generate QR code in terminal
+      qrcode.generate(qr, { small: false });
+      
+      console.log('\n' + '='.repeat(70));
+      console.log('📋 INSTRUCTIONS:');
+      console.log('1. Open WhatsApp on your phone');
+      console.log('2. Tap Menu (3 dots) > Linked Devices');
       console.log('3. Tap "Link a Device"');
-      console.log('4. Scan this QR code\n');
-      console.log('⏰ QR Code expires in 60 seconds!\n');
+      console.log('4. Scan the QR code above ☝️');
+      console.log('5. QR expires in 60 seconds');
+      console.log('='.repeat(70));
+      console.log('\n');
+      
+      // Method 2: Also log the raw QR as backup
+      console.log('🔑 Raw QR (if above doesn\'t display properly):');
+      console.log(qr.substring(0, 50) + '...');
     }
     
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('🔄 Connection closed. Reconnecting:', shouldReconnect);
-      if (shouldReconnect) {
-        connectToWhatsApp();
-      }
-    } else if (connection === 'open') {
-      console.log('\n✅ BOT IS READY AND CONNECTED!');
+    if (connection === 'connecting') {
+      console.log('🔄 Connecting to WhatsApp...');
+    }
+    
+    if (connection === 'open') {
+      console.log('\n' + '🎉'.repeat(30));
+      console.log('✅ BOT IS READY AND CONNECTED!');
+      console.log('🎉'.repeat(30));
       console.log('='.repeat(60));
       console.log(`📱 Bot: ${BOT_CONFIG.botName}`);
       console.log(`👑 Admin: +${BOT_CONFIG.adminNumber}`);
@@ -169,6 +204,31 @@ async function connectToWhatsApp() {
       }, 5000);
       
       initializeScheduledTasks(sock);
+    }
+    
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('🔄 Connection closed. Reconnecting:', shouldReconnect);
+      
+      // Reset QR flag on disconnect
+      qrShown = false;
+      
+      if (shouldReconnect) {
+        // Wait 3 seconds before reconnecting
+        setTimeout(() => {
+          connectToWhatsApp();
+        }, 3000);
+      } else {
+        console.log('❌ Logged out. Please scan QR code again.');
+        // Delete auth folder to force new QR
+        if (fs.existsSync('./auth_info')) {
+          fs.rmSync('./auth_info', { recursive: true, force: true });
+        }
+        // Restart connection
+        setTimeout(() => {
+          connectToWhatsApp();
+        }, 3000);
+      }
     }
   });
 
@@ -197,8 +257,7 @@ async function connectToWhatsApp() {
       
       // Check if user is muted
       if (mutedUsers[senderId] && mutedUsers[senderId] > Date.now()) {
-        console.log(`🔇 User ${senderId} is muted - deleting message`);
-        // Baileys doesn't support message deletion like wppconnect
+        console.log(`🔇 User ${senderId} is muted - ignoring message`);
         return;
       }
 
@@ -741,6 +800,12 @@ function initializeScheduledTasks(sock) {
 }
 
 // ==================== START BOT ====================
+// Delete auth folder if you want to force new QR code (uncomment if needed)
+// if (fs.existsSync('./auth_info')) {
+//   fs.rmSync('./auth_info', { recursive: true, force: true });
+//   console.log('🗑️ Deleted old auth folder - will generate new QR');
+// }
+
 connectToWhatsApp().catch(err => {
   console.error('❌ Failed to start:', err);
 });
