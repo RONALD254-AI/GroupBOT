@@ -181,6 +181,72 @@ async function setupBrowser() {
     return chromePath;
 }
 
+// ==================== BROWSER SETUP FUNCTION ====================
+async function setupBrowser() {
+    console.log('🔧 Setting up browser...');
+    
+    // Chrome paths to check
+    const chromePaths = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/opt/render/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome'
+    ];
+    
+    // Check if Chrome exists
+    let chromePath = null;
+    for (const pathPattern of chromePaths) {
+        if (pathPattern.includes('*')) {
+            // Handle wildcard paths
+            const baseDir = pathPattern.substring(0, pathPattern.indexOf('*'));
+            if (fs.existsSync(baseDir)) {
+                const dirs = fs.readdirSync(baseDir);
+                for (const dir of dirs) {
+                    const fullPath = pathPattern.replace('*', dir);
+                    if (fs.existsSync(fullPath)) {
+                        chromePath = fullPath;
+                        console.log(`✅ Found Chrome at: ${fullPath}`);
+                        break;
+                    }
+                }
+            }
+        } else {
+            if (fs.existsSync(pathPattern)) {
+                chromePath = pathPattern;
+                console.log(`✅ Found Chrome at: ${pathPattern}`);
+                break;
+            }
+        }
+        if (chromePath) break;
+    }
+    
+    // If Chrome not found and on Render, install it
+    if (!chromePath && IS_RENDER) {
+        console.log('📥 Chrome not found on Render. Installing...');
+        try {
+            // Install Chrome using puppeteer
+            execSync('npx puppeteer browsers install chrome', { 
+                stdio: 'inherit',
+                env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: 'false' }
+            });
+            
+            // Check again after installation
+            const puppeteerCache = path.join(process.env.HOME || '/opt/render', '.cache', 'puppeteer');
+            if (fs.existsSync(puppeteerCache)) {
+                const chromeDirs = fs.readdirSync(path.join(puppeteerCache, 'chrome'));
+                if (chromeDirs.length > 0) {
+                    chromePath = path.join(puppeteerCache, 'chrome', chromeDirs[0], 'chrome-linux64', 'chrome');
+                    console.log(`✅ Chrome installed at: ${chromePath}`);
+                }
+            }
+        } catch (installError) {
+            console.error('❌ Chrome installation failed:', installError.message);
+        }
+    }
+    
+    return chromePath;
+}
+
 // ==================== BOT INITIALIZATION ====================
 console.log('🚀 Initializing bot...');
 
@@ -188,7 +254,14 @@ console.log('🚀 Initializing bot...');
 (async () => {
     const chromePath = await setupBrowser();
     
-    // Prepare browser options
+    if (!chromePath) {
+        console.error('❌ CRITICAL: No Chrome path found!');
+        process.exit(1);
+    }
+    
+    console.log(`✅ Using Chrome from: ${chromePath}`);
+    
+    // Prepare browser options with EXPLICIT Chrome path
     const browserOptions = {
         session: 'highron-bot',
         headless: true,
@@ -197,7 +270,10 @@ console.log('🚀 Initializing bot...');
         waitForLogin: true,
         logQR: true,
         autoClose: 0,
+        useChrome: true,
+        browser: 'chrome',
         puppeteerOptions: {
+            executablePath: chromePath,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -215,14 +291,6 @@ console.log('🚀 Initializing bot...');
             ]
         }
     };
-    
-    if (chromePath) {
-        console.log(`✅ Using Chrome from: ${chromePath}`);
-        browserOptions.useChrome = true;
-        browserOptions.puppeteerOptions.executablePath = chromePath;
-    } else {
-        console.log('⚠️ No Chrome found. Will attempt to use bundled Chromium...');
-    }
     
     console.log('📱 Launching browser...');
     
