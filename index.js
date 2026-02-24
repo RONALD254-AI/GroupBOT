@@ -1,11 +1,11 @@
-// index.js - HighRon Master Bot (COMPLETE Version with ALL Commands + RENDER FIXES)
+// index.js - HighRon Master Bot (COMPLETE Version with ALL Commands + RENDER FIXED)
 const wppconnect = require('@wppconnect-team/wppconnect');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 const { execSync } = require('child_process');
-const express = require('express'); // ADD THIS FOR RENDER
+const express = require('express');
 
 // ==================== RENDER PORT BINDING (KEEP ALIVE) ====================
 const app = express();
@@ -30,33 +30,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Render health check server running on port ${PORT}`);
 });
 
-// ==================== CHROME SETUP (RENDER OPTIMIZED) ====================
-console.log('🔍 Checking Chrome installation...');
-
-// First check if we're on Render
-const IS_RENDER = fs.existsSync('/usr/bin/google-chrome') || process.env.RENDER === 'true';
-
-const CHROME_PATHS = IS_RENDER ? [
-    '/usr/bin/google-chrome',
-    '/usr/bin/chromium-browser',
-    '/usr/bin/chromium'
-] : [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Users\\ronal\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
-];
-
-function findChrome() {
-    for (const chromePath of CHROME_PATHS) {
-        if (fs.existsSync(chromePath)) {
-            console.log(`✅ Found Chrome at: ${chromePath}`);
-            return chromePath;
-        }
-    }
-    return null;
-}
-
-const CHROME_PATH = findChrome();
+// ==================== DETECT RENDER ENVIRONMENT ====================
+const IS_RENDER = process.env.RENDER === 'true' || fs.existsSync('/etc/render') || fs.existsSync('/usr/bin/google-chrome');
 
 // ==================== BOT CONFIGURATIONS ====================
 const BOT_CONFIG = {
@@ -142,210 +117,308 @@ console.log('='.repeat(60));
 if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
 loadData();
 
-// ==================== BOT INITIALIZATION (RENDER OPTIMIZED) ====================
-console.log('🚀 Initializing bot...');
-
-// Prepare browser options for Render
-const browserOptions = {
-    session: 'highron-bot',
-    headless: true,
-    disableWelcome: true,
-    updatesLog: false,
-    waitForLogin: true,
-    logQR: true,
-    autoClose: 0, // Disable auto-close on Render
-    puppeteerOptions: {
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu',
-            '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-breakpad',
-            '--window-size=1920,1080'
-        ]
+// ==================== BROWSER SETUP FUNCTION ====================
+async function setupBrowser() {
+    console.log('🔧 Setting up browser...');
+    
+    // Chrome paths to check
+    const chromePaths = [
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/opt/render/.cache/puppeteer/chrome/linux-*/chrome-linux64/chrome'
+    ];
+    
+    // Check if Chrome exists
+    let chromePath = null;
+    for (const pathPattern of chromePaths) {
+        if (pathPattern.includes('*')) {
+            // Handle wildcard paths
+            const baseDir = pathPattern.substring(0, pathPattern.indexOf('*'));
+            if (fs.existsSync(baseDir)) {
+                const dirs = fs.readdirSync(baseDir);
+                for (const dir of dirs) {
+                    const fullPath = pathPattern.replace('*', dir);
+                    if (fs.existsSync(fullPath)) {
+                        chromePath = fullPath;
+                        break;
+                    }
+                }
+            }
+        } else {
+            if (fs.existsSync(pathPattern)) {
+                chromePath = pathPattern;
+                break;
+            }
+        }
+        if (chromePath) break;
     }
-};
-
-// Add Chrome path if found
-if (CHROME_PATH) {
-    console.log(`📱 Using browser from: ${CHROME_PATH}`);
-    browserOptions.useChrome = true;
-    browserOptions.puppeteerOptions.executablePath = CHROME_PATH;
-} else {
-    console.log('⚠️ Browser not found, using bundled Chromium...');
-    if (IS_RENDER) {
-        console.log('📥 On Render - attempting to use system Chrome...');
-        browserOptions.useFirefox = true; // Fallback to Firefox on Render
-    } else {
+    
+    // If Chrome not found and on Render, install it
+    if (!chromePath && IS_RENDER) {
+        console.log('📥 Chrome not found on Render. Installing...');
         try {
-            console.log('📥 Installing Chrome...');
-            execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
-            console.log('✅ Chrome installed successfully!');
+            // Install Chrome using puppeteer
+            execSync('npx puppeteer browsers install chrome', { 
+                stdio: 'inherit',
+                env: { ...process.env, PUPPETEER_SKIP_DOWNLOAD: 'false' }
+            });
+            
+            // Check again after installation
+            const puppeteerCache = path.join(process.env.HOME || '/opt/render', '.cache', 'puppeteer');
+            if (fs.existsSync(puppeteerCache)) {
+                const chromeDirs = fs.readdirSync(path.join(puppeteerCache, 'chrome'));
+                if (chromeDirs.length > 0) {
+                    chromePath = path.join(puppeteerCache, 'chrome', chromeDirs[0], 'chrome-linux64', 'chrome');
+                    console.log(`✅ Chrome installed at: ${chromePath}`);
+                }
+            }
         } catch (installError) {
-            console.log('⚠️ Using Firefox instead...');
-            browserOptions.useFirefox = true;
+            console.error('❌ Chrome installation failed:', installError.message);
         }
     }
+    
+    return chromePath;
 }
 
-wppconnect.create(browserOptions).then(client => {
-    console.log('✅ BOT INITIALIZED!');
-    console.log('📱 ' + (IS_RENDER ? 'CHECK RENDER LOGS FOR QR CODE' : 'Waiting for QR code...') + '\n');
+// ==================== BOT INITIALIZATION ====================
+console.log('🚀 Initializing bot...');
+
+// Setup browser and then create client
+(async () => {
+    const chromePath = await setupBrowser();
     
-    // Handle QR code
-    client.onQRUpdated = (qrCode) => {
-        console.log('\n' + '='.repeat(60));
-        console.log('📱 SCAN THIS QR CODE WITH WHATSAPP:');
-        console.log('='.repeat(60));
-        qrcode.generate(qrCode, { small: true });
-        console.log('='.repeat(60));
-        console.log('\n1. Open WhatsApp on your phone');
-        console.log('2. Tap Menu > Linked Devices');
-        console.log('3. Tap "Link a Device"');
-        console.log('4. Scan this QR code\n');
-        if (IS_RENDER) {
-            console.log('⏰ On Render - You have 60 seconds to scan before timeout!\n');
+    // Prepare browser options
+    const browserOptions = {
+        session: 'highron-bot',
+        headless: true,
+        disableWelcome: true,
+        updatesLog: false,
+        waitForLogin: true,
+        logQR: true,
+        autoClose: 0,
+        puppeteerOptions: {
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--disable-gpu',
+                '--disable-web-security',
+                '--disable-features=VizDisplayCompositor',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disable-breakpad',
+                '--window-size=1920,1080',
+                '--remote-debugging-port=9222'
+            ]
         }
     };
     
-    client.onAuthenticated = () => {
-        console.log('✅ Authentication successful!');
-    };
+    if (chromePath) {
+        console.log(`✅ Using Chrome from: ${chromePath}`);
+        browserOptions.useChrome = true;
+        browserOptions.puppeteerOptions.executablePath = chromePath;
+    } else {
+        console.log('⚠️ No Chrome found. Will attempt to use bundled Chromium...');
+    }
     
-    client.onReady = () => {
-        console.log('\n✅ BOT IS READY AND CONNECTED!');
-        console.log('='.repeat(60));
-        console.log(`📱 Bot: ${BOT_CONFIG.botName} v${BOT_CONFIG.version}`);
-        console.log(`👑 Main Admin: +${BOT_CONFIG.adminNumber}`);
-        console.log(`👑 Secondary Admin: +${BOT_CONFIG.secondAdminNumber}`);
-        console.log(`🎯 Target Group: ${TARGET_GROUP_ID}`);
-        console.log('='.repeat(60));
+    console.log('📱 Launching browser...');
+    
+    try {
+        const client = await wppconnect.create(browserOptions);
+        console.log('✅ BOT INITIALIZED!');
+        console.log('📱 ' + (IS_RENDER ? 'CHECK BELOW FOR QR CODE' : 'Waiting for QR code...') + '\n');
         
-        setTimeout(async () => {
+        // Handle QR code
+        client.onQRUpdated = (qrCode) => {
+            console.log('\n' + '='.repeat(60));
+            console.log('📱 SCAN THIS QR CODE WITH WHATSAPP:');
+            console.log('='.repeat(60));
+            qrcode.generate(qrCode, { small: true });
+            console.log('='.repeat(60));
+            console.log('\n1. Open WhatsApp on your phone');
+            console.log('2. Tap Menu > Linked Devices');
+            console.log('3. Tap "Link a Device"');
+            console.log('4. Scan this QR code\n');
+            if (IS_RENDER) {
+                console.log('⏰ Scan within 60 seconds!\n');
+            }
+        };
+        
+        client.onAuthenticated = () => {
+            console.log('✅ Authentication successful!');
+        };
+        
+        client.onReady = () => {
+            console.log('\n✅ BOT IS READY AND CONNECTED!');
+            console.log('='.repeat(60));
+            console.log(`📱 Bot: ${BOT_CONFIG.botName} v${BOT_CONFIG.version}`);
+            console.log(`👑 Main Admin: +${BOT_CONFIG.adminNumber}`);
+            console.log(`👑 Secondary Admin: +${BOT_CONFIG.secondAdminNumber}`);
+            console.log(`🎯 Target Group: ${TARGET_GROUP_ID}`);
+            console.log('='.repeat(60));
+            
+            setTimeout(async () => {
+                try {
+                    await client.sendText(TARGET_GROUP_ID, '🤖 *HighRon Master Bot is now online!*\nUse /menu to see commands.');
+                    console.log('✅ Welcome message sent to group');
+                } catch (err) {
+                    console.log('⚠️ Could not send welcome message - make sure bot is in the group');
+                }
+            }, 5000);
+            
+            // Initialize scheduled tasks
+            initializeScheduledTasks(client);
+        };
+        
+        // Handle incoming messages
+        client.onMessage(async (message) => {
+            // Only process messages from target group
+            if (message.from !== TARGET_GROUP_ID) return;
+            
+            console.log(`\n📨 Message from ${message.sender.pushname || message.sender.id}: ${message.body.substring(0, 50)}...`);
+            
             try {
-                await client.sendText(TARGET_GROUP_ID, '🤖 *HighRon Master Bot is now online!*\nUse /menu to see commands.');
-                console.log('✅ Welcome message sent to group');
-            } catch (err) {
-                console.log('⚠️ Could not send welcome message - make sure bot is in the group');
-            }
-        }, 5000);
-        
-        // Initialize scheduled tasks
-        initializeScheduledTasks(client);
-    };
-    
-    // Handle incoming messages
-    client.onMessage(async (message) => {
-        // Only process messages from target group
-        if (message.from !== TARGET_GROUP_ID) return;
-        
-        console.log(`\n📨 Message from ${message.sender.pushname || message.sender.id}: ${message.body.substring(0, 50)}...`);
-        
-        try {
-            // Check if sender is admin
-            const isUserAdmin = await checkIfAdmin(client, message.from, message.sender.id);
-            
-            // Check if user is muted
-            if (mutedUsers[message.sender.id] && mutedUsers[message.sender.id] > Date.now()) {
-                console.log(`🔇 User ${message.sender.id} is muted - deleting message`);
-                try {
-                    await client.deleteMessage(message.from, message.id.toString(), true);
-                } catch (err) {
-                    console.log("Error deleting muted message:", err.message);
-                }
-                return;
-            }
-
-            // Check for expired mutes
-            if (mutedUsers[message.sender.id] && mutedUsers[message.sender.id] < Date.now()) {
-                delete mutedUsers[message.sender.id];
-                saveData();
-            }
-            
-            // ANTI-LINK
-            if (antilinkEnabled && !isUserAdmin && linkRegex.test(message.body)) {
-                try {
-                    await client.sendText(message.from, `@${message.sender.id.split('@')[0]} Links are not allowed in this group! Your message was deleted.`, {
-                        mentions: [message.sender.id]
-                    });
-                    await client.deleteMessage(message.from, message.id.toString(), true);
-                    console.log('🚫 Link deleted');
-                } catch (err) {
-                    console.log('Anti-link error:', err.message);
-                }
-                return;
-            }
-            
-            // COMMANDS
-            if (message.body.startsWith(BOT_CONFIG.prefix)) {
-                await handleCommand(client, message, isUserAdmin);
-                return;
-            }
-            
-            // REMOVE COMMAND
-            if (message.body.toLowerCase().startsWith('!remove')) {
-                await handleRemoveCommand(client, message, isUserAdmin);
-                return;
-            }
-            
-            // QUESTION CHECK
-            if (message.body.trim().endsWith('?')) {
-                await handleQuestion(client, message);
-                return;
-            }
-            
-            // AUTO-REPLY
-            for (const [keyword, response] of Object.entries(autoReplyKeywords)) {
-                if (message.body.toLowerCase().includes(keyword.toLowerCase())) {
-                    await client.sendText(message.from, response);
-                    console.log(`🤖 Auto-reply triggered for: ${keyword}`);
+                // Check if sender is admin
+                const isUserAdmin = await checkIfAdmin(client, message.from, message.sender.id);
+                
+                // Check if user is muted
+                if (mutedUsers[message.sender.id] && mutedUsers[message.sender.id] > Date.now()) {
+                    console.log(`🔇 User ${message.sender.id} is muted - deleting message`);
+                    try {
+                        await client.deleteMessage(message.from, message.id.toString(), true);
+                    } catch (err) {
+                        console.log("Error deleting muted message:", err.message);
+                    }
                     return;
                 }
+
+                // Check for expired mutes
+                if (mutedUsers[message.sender.id] && mutedUsers[message.sender.id] < Date.now()) {
+                    delete mutedUsers[message.sender.id];
+                    saveData();
+                }
+                
+                // ANTI-LINK
+                if (antilinkEnabled && !isUserAdmin && linkRegex.test(message.body)) {
+                    try {
+                        await client.sendText(message.from, `@${message.sender.id.split('@')[0]} Links are not allowed in this group! Your message was deleted.`, {
+                            mentions: [message.sender.id]
+                        });
+                        await client.deleteMessage(message.from, message.id.toString(), true);
+                        console.log('🚫 Link deleted');
+                    } catch (err) {
+                        console.log('Anti-link error:', err.message);
+                    }
+                    return;
+                }
+                
+                // COMMANDS
+                if (message.body.startsWith(BOT_CONFIG.prefix)) {
+                    await handleCommand(client, message, isUserAdmin);
+                    return;
+                }
+                
+                // REMOVE COMMAND
+                if (message.body.toLowerCase().startsWith('!remove')) {
+                    await handleRemoveCommand(client, message, isUserAdmin);
+                    return;
+                }
+                
+                // QUESTION CHECK
+                if (message.body.trim().endsWith('?')) {
+                    await handleQuestion(client, message);
+                    return;
+                }
+                
+                // AUTO-REPLY
+                for (const [keyword, response] of Object.entries(autoReplyKeywords)) {
+                    if (message.body.toLowerCase().includes(keyword.toLowerCase())) {
+                        await client.sendText(message.from, response);
+                        console.log(`🤖 Auto-reply triggered for: ${keyword}`);
+                        return;
+                    }
+                }
+                
+            } catch (err) {
+                console.log('Error processing message:', err.message);
+            }
+        });
+        
+        // ==================== LEAVE PREVENTION ====================
+        client.onParticipantsChanged = async (event) => {
+            if (event.act === 'remove' && event.from === TARGET_GROUP_ID) {
+                try {
+                    await client.addParticipant(event.from, event.who);
+                    console.log(`🔄 User re-added: ${event.who}`);
+                    
+                    await client.sendText(event.from, `@${event.who.split('@')[0]} You cannot leave without permission! Adding you back...`, {
+                        mentions: [event.who]
+                    });
+                } catch (error) {
+                    console.log('Leave prevention error:', error.message);
+                }
             }
             
-        } catch (err) {
-            console.log('Error processing message:', err.message);
-        }
-    });
-    
-    // ==================== LEAVE PREVENTION ====================
-    client.onParticipantsChanged = async (event) => {
-        if (event.act === 'remove' && event.from === TARGET_GROUP_ID) {
-            try {
-                await client.addParticipant(event.from, event.who);
-                console.log(`🔄 User re-added: ${event.who}`);
-                
-                await client.sendText(event.from, `@${event.who.split('@')[0]} You cannot leave without permission! Adding you back...`, {
-                    mentions: [event.who]
-                });
-            } catch (error) {
-                console.log('Leave prevention error:', error.message);
+            // ==================== GROUP JOIN EVENT ====================
+            if (event.act === 'add' && event.from === TARGET_GROUP_ID) {
+                try {
+                    const welcomeMsg = welcomeMessage.replace('@user', `@${event.who.split('@')[0]}`);
+                    await client.sendText(event.from, welcomeMsg, {
+                        mentions: [event.who]
+                    });
+                    console.log(`👋 Welcome sent to: ${event.who}`);
+                } catch (error) {
+                    console.log('Welcome error:', error.message);
+                }
             }
-        }
+        };
         
-        // ==================== GROUP JOIN EVENT ====================
-        if (event.act === 'add' && event.from === TARGET_GROUP_ID) {
-            try {
-                const welcomeMsg = welcomeMessage.replace('@user', `@${event.who.split('@')[0]}`);
-                await client.sendText(event.from, welcomeMsg, {
-                    mentions: [event.who]
-                });
-                console.log(`👋 Welcome sent to: ${event.who}`);
-            } catch (error) {
-                console.log('Welcome error:', error.message);
+    } catch (error) {
+        console.error('❌ Fatal Error:', error);
+        console.log('\n🔄 Retrying with minimal browser settings...');
+        
+        // Retry with minimal options
+        const fallbackOptions = {
+            session: 'highron-bot',
+            headless: true,
+            disableWelcome: true,
+            updatesLog: false,
+            waitForLogin: true,
+            logQR: true,
+            autoClose: 0,
+            puppeteerOptions: {
+                args: ['--no-sandbox', '--disable-setuid-sandbox']
             }
+        };
+        
+        try {
+            const client = await wppconnect.create(fallbackOptions);
+            console.log('✅ BOT INITIALIZED with fallback settings!');
+            
+            // Re-attach all event handlers (copy the same handlers from above)
+            client.onQRUpdated = (qrCode) => {
+                console.log('\n' + '='.repeat(60));
+                console.log('📱 SCAN THIS QR CODE WITH WHATSAPP:');
+                console.log('='.repeat(60));
+                qrcode.generate(qrCode, { small: true });
+                console.log('='.repeat(60));
+            };
+            
+            client.onReady = () => {
+                console.log('\n✅ BOT READY!');
+                initializeScheduledTasks(client);
+            };
+            
+            // Add other event handlers as needed
+            
+        } catch (finalError) {
+            console.error('❌ All attempts failed:', finalError);
         }
-    };
-    
-}).catch(error => {
-    console.error('❌ Fatal Error:', error);
-});
+    }
+})();
 
 // ==================== COMMAND HANDLER ====================
 async function handleCommand(client, message, isUserAdmin) {
