@@ -1,15 +1,46 @@
-// index.js - HighRon Master Bot (COMPLETE Version with ALL Commands)
+// index.js - HighRon Master Bot (COMPLETE Version with ALL Commands + RENDER FIXES)
 const wppconnect = require('@wppconnect-team/wppconnect');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
 const { execSync } = require('child_process');
+const express = require('express'); // ADD THIS FOR RENDER
 
-// ==================== CHROME SETUP ====================
+// ==================== RENDER PORT BINDING (KEEP ALIVE) ====================
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head><title>HighRon Master Bot</title></head>
+      <body style="font-family: sans-serif; text-align: center; padding: 50px;">
+        <h1>🤖 HighRon Master Bot</h1>
+        <p>Status: <strong style="color: green;">ONLINE</strong></p>
+        <p>WhatsApp bot process is running in the background.</p>
+        <p><small>Check Render logs for QR code to scan.</small></p>
+        <p><small>Version: ${require('./package.json').version}</small></p>
+      </body>
+    </html>
+  `);
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Render health check server running on port ${PORT}`);
+});
+
+// ==================== CHROME SETUP (RENDER OPTIMIZED) ====================
 console.log('🔍 Checking Chrome installation...');
 
-const CHROME_PATHS = [
+// First check if we're on Render
+const IS_RENDER = fs.existsSync('/usr/bin/google-chrome') || process.env.RENDER === 'true';
+
+const CHROME_PATHS = IS_RENDER ? [
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/chromium'
+] : [
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Users\\ronal\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe'
@@ -111,49 +142,76 @@ console.log('='.repeat(60));
 if (!fs.existsSync("./data")) fs.mkdirSync("./data", { recursive: true });
 loadData();
 
-// ==================== BOT INITIALIZATION ====================
+// ==================== BOT INITIALIZATION (RENDER OPTIMIZED) ====================
 console.log('🚀 Initializing bot...');
 
-// Prepare browser options
+// Prepare browser options for Render
 const browserOptions = {
     session: 'highron-bot',
     headless: true,
+    disableWelcome: true,
+    updatesLog: false,
+    waitForLogin: true,
+    logQR: true,
+    autoClose: 0, // Disable auto-close on Render
     puppeteerOptions: {
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--disable-gpu',
+            '--disable-web-security',
+            '--disable-features=VizDisplayCompositor',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-breakpad',
+            '--window-size=1920,1080'
+        ]
     }
 };
 
 // Add Chrome path if found
 if (CHROME_PATH) {
-    console.log(`📱 Using Chrome from: ${CHROME_PATH}`);
+    console.log(`📱 Using browser from: ${CHROME_PATH}`);
     browserOptions.useChrome = true;
     browserOptions.puppeteerOptions.executablePath = CHROME_PATH;
 } else {
-    console.log('⚠️ Chrome not found, using bundled Chromium...');
-    try {
-        console.log('📥 Installing Chrome...');
-        execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
-        console.log('✅ Chrome installed successfully!');
-    } catch (installError) {
-        console.log('⚠️ Using Firefox instead...');
-        browserOptions.useFirefox = true;
+    console.log('⚠️ Browser not found, using bundled Chromium...');
+    if (IS_RENDER) {
+        console.log('📥 On Render - attempting to use system Chrome...');
+        browserOptions.useFirefox = true; // Fallback to Firefox on Render
+    } else {
+        try {
+            console.log('📥 Installing Chrome...');
+            execSync('npx puppeteer browsers install chrome', { stdio: 'inherit' });
+            console.log('✅ Chrome installed successfully!');
+        } catch (installError) {
+            console.log('⚠️ Using Firefox instead...');
+            browserOptions.useFirefox = true;
+        }
     }
 }
 
 wppconnect.create(browserOptions).then(client => {
     console.log('✅ BOT INITIALIZED!');
-    console.log('📱 Waiting for QR code...\n');
+    console.log('📱 ' + (IS_RENDER ? 'CHECK RENDER LOGS FOR QR CODE' : 'Waiting for QR code...') + '\n');
     
     // Handle QR code
     client.onQRUpdated = (qrCode) => {
-        console.log('\n📱 SCAN THIS QR CODE WITH WHATSAPP:');
-        console.log('='.repeat(40));
+        console.log('\n' + '='.repeat(60));
+        console.log('📱 SCAN THIS QR CODE WITH WHATSAPP:');
+        console.log('='.repeat(60));
         qrcode.generate(qrCode, { small: true });
-        console.log('='.repeat(40));
-        console.log('1. Open WhatsApp on your phone');
+        console.log('='.repeat(60));
+        console.log('\n1. Open WhatsApp on your phone');
         console.log('2. Tap Menu > Linked Devices');
         console.log('3. Tap "Link a Device"');
         console.log('4. Scan this QR code\n');
+        if (IS_RENDER) {
+            console.log('⏰ On Render - You have 60 seconds to scan before timeout!\n');
+        }
     };
     
     client.onAuthenticated = () => {
@@ -260,7 +318,6 @@ wppconnect.create(browserOptions).then(client => {
     client.onParticipantsChanged = async (event) => {
         if (event.act === 'remove' && event.from === TARGET_GROUP_ID) {
             try {
-                const chat = await client.getChatById(event.from);
                 await client.addParticipant(event.from, event.who);
                 console.log(`🔄 User re-added: ${event.who}`);
                 
@@ -271,10 +328,8 @@ wppconnect.create(browserOptions).then(client => {
                 console.log('Leave prevention error:', error.message);
             }
         }
-    };
-    
-    // ==================== GROUP JOIN EVENT ====================
-    client.onParticipantsChanged = async (event) => {
+        
+        // ==================== GROUP JOIN EVENT ====================
         if (event.act === 'add' && event.from === TARGET_GROUP_ID) {
             try {
                 const welcomeMsg = welcomeMessage.replace('@user', `@${event.who.split('@')[0]}`);
@@ -408,7 +463,7 @@ async function handleCommand(client, message, isUserAdmin) {
 👥 *GROUP INFORMATION*
 
 📌 Name: ${groupInfo.name || "Unnamed"}
-About the group: Exploring the world of Technology and advancing through different activities offered by HighRon Tech
+📝 About: Exploring the world of Technology and advancing through different activities offered by HighRon Tech
 👥 Members: ${groupInfo.participants ? groupInfo.participants.length : "Unknown"}
 👑 Admins: ${admins}
 🛡️ Anti-Link: ${antilinkEnabled ? "ON" : "OFF"}
@@ -520,7 +575,6 @@ ${isBotAdmin ? "✅ Bot is ready!" : "⚠️ Promote bot to admin for full featu
             break;
             
         case "kick":
-            // For wppconnect, we need to handle this differently
             await client.sendText(message.from, "⚠️ To kick a user, reply to their message with /kick (Make sure bot is admin)");
             break;
             
@@ -573,7 +627,6 @@ ${isBotAdmin ? "✅ Bot is ready!" : "⚠️ Promote bot to admin for full featu
                 await client.sendText(message.from, "❌ Reply to the user's message you want to warn!");
                 return;
             }
-            // Get the quoted message sender
             const warnTargetId = message.quotedParticipant || message.quotedMsg?.sender?.id;
             if (warnTargetId) {
                 warnedUsers[warnTargetId] = (warnedUsers[warnTargetId] || 0) + 1;
